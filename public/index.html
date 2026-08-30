@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Camera Attendance System</title>
+    <!-- Load Face-API Library -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@latest/dist/face-api.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 30px; background: #f4f4f9; }
+        video { border: 4px solid #333; border-radius: 8px; transform: scaleX(-1); }
+        #status { font-size: 1.2rem; font-weight: bold; color: #007bff; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <h2>AI Face Recognition Attendance</h2>
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <div id="status">Loading AI Models...</div>
+
+    <script>
+        const video = document.getElementById('video');
+        const statusEl = document.getElementById('status');
+        let isSending = false; // Prevents duplicate concurrent requests
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+            } catch (err) {
+                statusEl.innerText = "Camera access denied or unsupported.";
+            }
+        }
+
+        async function loadAIModels() {
+            const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+            await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+            await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+            statusEl.innerText = "AI Models Loaded. Scanning for faces...";
+            detectFaces();
+        }
+
+        function detectFaces() {
+            setInterval(async () => {
+                if (isSending) return; // Skip if a request is already pending
+                
+                const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
+                
+                if (detections) {
+                    statusEl.innerText = "Face Detected! Processing database match...";
+                    recordAttendance(1); // Using test User ID 1
+                } else {
+                    statusEl.innerText = "Searching for face in frame...";
+                }
+            }, 4000);
+        }
+
+        async function recordAttendance(userId) {
+            isSending = true;
+            try {
+                const response = await fetch('/api/attendance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId })
+                });
+                
+                const data = await response.json();
+                statusEl.innerText = data.message;
+                
+                // Keep lock active for 10 seconds to prevent spamming after a successful match
+                setTimeout(() => { isSending = false; }, 10000);
+            } catch (e) {
+                statusEl.innerText = "Network transmission error.";
+                isSending = false;
+            }
+        }
+
+        startCamera().then(() => {
+            video.addEventListener('play', loadAIModels);
+        });
+    </script>
+</body>
+</html>
