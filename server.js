@@ -18,9 +18,9 @@ app.get('/', (req, res) => {
 
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'u95881_ai_attend_user',
+    user: process.env.DB_USER || 'u958815946_ai_attend_user',
     password: process.env.DB_PASSWORD || 'Indicraft@2026',
-    database: process.env.DB_NAME || 'u95881_ai_attend',
+    database: process.env.DB_NAME || 'u958815946_ai_attend',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
