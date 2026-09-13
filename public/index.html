@@ -7,20 +7,50 @@
     <!-- Load Face-API Library -->
     <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@latest/dist/face-api.js"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 30px; background: #f4f4f9; }
-        video { border: 4px solid #333; border-radius: 8px; transform: scaleX(-1); }
-        #status { font-size: 1.2rem; font-weight: bold; color: #007bff; margin-top: 15px; }
+        body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            margin-top: 30px; 
+            background: #f4f4f9; 
+        }
+        .container {
+            position: relative;
+            display: inline-block;
+        }
+        video { 
+            border: 4px solid #333; 
+            border-radius: 8px; 
+            transform: scaleX(-1); 
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scaleX(-1);
+        }
+        #status { 
+            font-size: 1.2rem; 
+            font-weight: bold; 
+            color: #007bff; 
+            margin-top: 15px; 
+        }
     </style>
 </head>
 <body>
     <h2>AI Face Recognition Attendance</h2>
-    <video id="video" width="640" height="480" autoplay muted></video>
-    <div id="status">Loading AI Models...</div>
+    
+    <div class="container">
+        <video id="video" width="640" height="480" autoplay muted></video>
+    </div>
+    
+    <div id="status">Initializing system...</div>
 
     <script>
         const video = document.getElementById('video');
         const statusEl = document.getElementById('status');
-        let isSending = false; // Prevents duplicate concurrent requests
+        
+        let faceMatcher = null;
+        let isSending = false;
 
         async function startCamera() {
             try {
@@ -31,27 +61,83 @@
             }
         }
 
-        async function loadAIModels() {
+        async function loadAIModelsAndData() {
+            statusEl.innerText = "Loading AI Models...";
             const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
-            await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-            await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-            statusEl.innerText = "AI Models Loaded. Scanning for faces...";
+            
+            // Load recognition & landmark models alongside tinyFaceDetector
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+            ]);
+
+            statusEl.innerText = "Fetching employee face descriptors...";
+            await syncEmployeeDescriptors();
+            
+            statusEl.innerText = "AI System ready. Scanning for faces...";
             detectFaces();
         }
 
+        async function syncEmployeeDescriptors() {
+            try {
+                const res = await fetch('/api/employees');
+                const data = await res.json();
+                
+                if (data.status !== 'success' || !data.employees.length) {
+                    statusEl.innerText = "No registered employees found in database.";
+                    return;
+                }
+
+                const labeledDescriptors = data.employees.map(emp => {
+                    const descriptorArray = new Float32Array(Object.values(emp.faceDescriptor));
+                    return new faceapi.LabeledFaceDescriptors(
+                        emp.userId.toString(), 
+                        [descriptorArray]
+                    );
+                });
+
+                // Set distance threshold (0.6 is standard face-api match threshold)
+                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+            } catch (err) {
+                console.error("Failed to sync employee data:", err);
+                statusEl.innerText = "Error syncing registered face profiles.";
+            }
+        }
+
         function detectFaces() {
+            const canvas = faceapi.createCanvasFromMedia(video);
+            document.querySelector('.container').append(canvas);
+            
+            const displaySize = { width: video.width, height: video.height };
+            faceapi.matchDimensions(canvas, displaySize);
+
             setInterval(async () => {
-                if (isSending) return; // Skip if a request is already pending
-                
-                const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions());
-                
-                if (detections) {
-                    statusEl.innerText = "Face Detected! Processing database match...";
-                    recordAttendance(1); // Using test User ID 1
+                if (isSending || !faceMatcher) return;
+
+                const detection = await faceapi
+                    .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                    .withFaceLandmarks()
+                    .withFaceDescriptor();
+
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+                if (detection) {
+                    const resizedDetection = faceapi.resizeResults(detection, displaySize);
+                    faceapi.draw.drawDetections(canvas, resizedDetection);
+
+                    const match = faceMatcher.findBestMatch(detection.descriptor);
+                    
+                    if (match.label !== 'unknown') {
+                        statusEl.innerText = `Face Matched! Logging attendance...`;
+                        recordAttendance(match.label);
+                    } else {
+                        statusEl.innerText = "Unrecognized face detected.";
+                    }
                 } else {
                     statusEl.innerText = "Searching for face in frame...";
                 }
-            }, 4000);
+            }, 2000);
         }
 
         async function recordAttendance(userId) {
@@ -62,12 +148,12 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ userId })
                 });
-                
+
                 const data = await response.json();
                 statusEl.innerText = data.message;
-                
-                // Keep lock active for 10 seconds to prevent spamming after a successful match
-                setTimeout(() => { isSending = false; }, 10000);
+
+                // Lock for 8 seconds to avoid re-logging identical detection loops
+                setTimeout(() => { isSending = false; }, 8000);
             } catch (e) {
                 statusEl.innerText = "Network transmission error.";
                 isSending = false;
@@ -75,7 +161,7 @@
         }
 
         startCamera().then(() => {
-            video.addEventListener('play', loadAIModels);
+            video.addEventListener('play', loadAIModelsAndData);
         });
     </script>
 </body>
