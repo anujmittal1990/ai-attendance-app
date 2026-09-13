@@ -6,20 +6,16 @@ require('dotenv').config();
 
 const app = express();
 
-// Increase payload limits to handle face vector array transmissions cleanly
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cors());
 
-// Serve static frontend files from the 'public' folder
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Root route handler
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// MySQL Connection Pool to avoid connection exhaustion and 503 errors
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'u95881_ai_attend_user',
@@ -30,7 +26,6 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
-// Verify initial DB Pool state
 db.getConnection((err, connection) => {
     if (err) {
         console.error('Database connection failed:', err.message);
@@ -147,7 +142,36 @@ app.post('/api/attendance', (req, res) => {
     });
 });
 
-// Global Safety Catches (Prevents Node.js Process Crash & 503 Errors)
+/**
+ * 4. FETCH ATTENDANCE LOGS API (NEW)
+ * Supports optional date filter via query param: /api/attendance-logs?date=YYYY-MM-DD
+ */
+app.get('/api/attendance-logs', (req, res) => {
+    const { date } = req.query;
+    
+    let query = `
+        SELECT a.id, a.user_id, e.name, a.timestamp 
+        FROM attendance a
+        JOIN employees e ON a.user_id = e.user_id
+    `;
+    const queryParams = [];
+
+    if (date) {
+        query += ` WHERE DATE(a.timestamp) = ?`;
+        queryParams.push(date);
+    }
+
+    query += ` ORDER BY a.timestamp DESC LIMIT 100`;
+
+    db.query(query, queryParams, (err, results) => {
+        if (err) {
+            console.error('Error fetching attendance logs:', err);
+            return res.status(500).json({ status: 'error', message: 'Failed to fetch attendance logs.' });
+        }
+        res.json({ status: 'success', logs: results });
+    });
+});
+
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
