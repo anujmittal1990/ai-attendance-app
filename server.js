@@ -6,12 +6,12 @@ require('dotenv').config();
 
 const app = express();
 
-// Middleware setup
-app.use(express.json({ limit: '10mb' })); // Handles incoming face array descriptors
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Increase payload limits to handle face vector array transmissions cleanly
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cors());
 
-// Serve static files from the 'public' directory
+// Serve static frontend files from the 'public' folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Root route handler
@@ -19,18 +19,18 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Database Connection Pool
+// MySQL Connection Pool to avoid connection exhaustion and 503 errors
 const db = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
+    user: process.env.DB_USER || 'u95881_ai_attend_user',
+    password: process.env.DB_PASSWORD || 'Indicraft@2026',
+    database: process.env.DB_NAME || 'u95881_ai_attend',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 });
 
-// Test Database Connection
+// Verify initial DB Pool state
 db.getConnection((err, connection) => {
     if (err) {
         console.error('Database connection failed:', err.message);
@@ -41,8 +41,7 @@ db.getConnection((err, connection) => {
 });
 
 /**
- * 1. EMPLOYEE MASTER & FACE DATA REGISTRATION API
- * Receives { userId, name, faceDescriptor } from the front-end registration modal
+ * 1. EMPLOYEE REGISTRATION API
  */
 app.post('/api/employees', (req, res) => {
     const { userId, name, faceDescriptor } = req.body;
@@ -51,7 +50,6 @@ app.post('/api/employees', (req, res) => {
         return res.status(400).json({ status: 'error', message: 'Missing required employee fields or face vector.' });
     }
 
-    // Ensure array is properly stringified for MySQL JSON / TEXT column storage
     const descriptorString = typeof faceDescriptor === 'string' 
         ? faceDescriptor 
         : JSON.stringify(faceDescriptor);
@@ -69,8 +67,7 @@ app.post('/api/employees', (req, res) => {
 });
 
 /**
- * 2. FETCH ALL REGISTERED EMPLOYEES & FACE DESCRIPTORS
- * Serves descriptors to frontend to build faceapi.FaceMatcher on page load or post-registration
+ * 2. FETCH ALL REGISTERED EMPLOYEES
  */
 app.get('/api/employees', (req, res) => {
     const query = `SELECT user_id, name, face_descriptor FROM employees`;
@@ -100,7 +97,6 @@ app.get('/api/employees', (req, res) => {
 
 /**
  * 3. AI ATTENDANCE LOGGING API
- * Handles attendance verification and insertion in an optimized single flow
  */
 app.post('/api/attendance', (req, res) => {
     const { userId } = req.body;
@@ -109,7 +105,6 @@ app.post('/api/attendance', (req, res) => {
         return res.status(400).json({ status: 'error', message: 'User ID missing from request payload.' });
     }
 
-    // Single query to get employee name and check if attendance was logged today
     const checkQuery = `
         SELECT 
             e.name,
@@ -130,7 +125,6 @@ app.post('/api/attendance', (req, res) => {
 
         const employeeName = results[0].name;
 
-        // Block re-registration if face was already logged today
         if (results[0].already_marked > 0) {
             return res.status(200).json({ 
                 status: 'exists', 
@@ -138,7 +132,6 @@ app.post('/api/attendance', (req, res) => {
             });
         }
 
-        // Insert new record into attendance database
         const insertQuery = `INSERT INTO attendance (user_id) VALUES (?)`;
         db.query(insertQuery, [userId], (err) => {
             if (err) {
@@ -152,6 +145,15 @@ app.post('/api/attendance', (req, res) => {
             });
         });
     });
+});
+
+// Global Safety Catches (Prevents Node.js Process Crash & 503 Errors)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception thrown:', err);
 });
 
 const PORT = process.env.PORT || 3000;
