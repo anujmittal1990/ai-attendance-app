@@ -23,13 +23,15 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
-            margin: 0 10px;
+            margin: 0 5px;
             transition: background 0.3s;
         }
         .btn-primary { background: #007bff; color: white; }
         .btn-primary:hover { background: #0056b3; }
         .btn-success { background: #28a745; color: white; }
         .btn-success:hover { background: #218838; }
+        .btn-info { background: #17a2b8; color: white; }
+        .btn-info:hover { background: #138496; }
         .btn:disabled { background: #cccccc; cursor: not-allowed; }
         
         .container {
@@ -54,7 +56,6 @@
             margin-top: 15px; 
         }
         
-        /* Registration Form Section */
         #registration-form {
             display: none;
             margin: 15px auto;
@@ -71,6 +72,32 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
+
+        /* Attendance Table Styling */
+        #logs-view {
+            display: none;
+            margin: 20px auto;
+            max-width: 700px;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: center;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        tr:nth-child(even) { background-color: #f9f9f9; }
     </style>
 </head>
 <body>
@@ -79,17 +106,41 @@
     <div class="controls">
         <button id="btn-attendance" class="btn btn-primary" onclick="switchMode('attendance')" disabled>Mark Attendance</button>
         <button id="btn-register" class="btn btn-success" onclick="switchMode('register')" disabled>Add New Employee</button>
+        <button id="btn-logs" class="btn btn-info" onclick="switchMode('logs')">View Logs</button>
     </div>
 
-    <!-- Registration Form (Visible only in Registration Mode) -->
+    <!-- Registration Form Block -->
     <div id="registration-form">
         <h3>Register New Face</h3>
         <input type="text" id="reg-user-id" placeholder="User ID (e.g., EMP001)" required />
         <input type="text" id="reg-name" placeholder="Full Name" required />
         <button class="btn btn-success" style="margin-top: 10px;" onclick="captureAndRegister()">Capture & Save</button>
     </div>
+
+    <!-- Attendance Logs View -->
+    <div id="logs-view">
+        <h3>Attendance Logs</h3>
+        <div style="margin-bottom: 10px;">
+            <label for="filter-date"><strong>Filter by Date: </strong></label>
+            <input type="date" id="filter-date" onchange="fetchAttendanceLogs()" />
+            <button class="btn btn-info" style="padding: 5px 10px;" onclick="clearDateFilter()">Show All</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Log ID</th>
+                    <th>User ID</th>
+                    <th>Employee Name</th>
+                    <th>Date & Time</th>
+                </tr>
+            </thead>
+            <tbody id="logs-table-body">
+                <tr><td colspan="4">Loading records...</td></tr>
+            </tbody>
+        </table>
+    </div>
     
-    <div class="container">
+    <div class="container" id="camera-container">
         <video id="video" width="640" height="480" autoplay muted></video>
     </div>
     
@@ -99,12 +150,14 @@
         const video = document.getElementById('video');
         const statusEl = document.getElementById('status');
         const regForm = document.getElementById('registration-form');
+        const logsView = document.getElementById('logs-view');
+        const cameraContainer = document.getElementById('camera-container');
         const btnAttendance = document.getElementById('btn-attendance');
         const btnRegister = document.getElementById('btn-register');
         
         let faceMatcher = null;
         let isSending = false;
-        let currentMode = 'attendance'; // 'attendance' or 'register'
+        let currentMode = 'attendance';
         let detectionInterval = null;
 
         async function startCamera() {
@@ -129,7 +182,6 @@
             statusEl.innerText = "Fetching employee face descriptors...";
             await syncEmployeeDescriptors();
             
-            // Enable control buttons once models and dynamic features are ready
             btnAttendance.disabled = false;
             btnRegister.disabled = false;
 
@@ -169,12 +221,23 @@
 
             if (mode === 'attendance') {
                 regForm.style.display = 'none';
+                logsView.style.display = 'none';
+                cameraContainer.style.display = 'inline-block';
                 statusEl.innerText = "Attendance Mode Active. Scanning for faces...";
                 startAttendanceScanning();
             } else if (mode === 'register') {
                 clearInterval(detectionInterval);
+                logsView.style.display = 'none';
+                cameraContainer.style.display = 'inline-block';
                 regForm.style.display = 'block';
                 statusEl.innerText = "Registration Mode Active. Align face and click Capture.";
+            } else if (mode === 'logs') {
+                clearInterval(detectionInterval);
+                regForm.style.display = 'none';
+                cameraContainer.style.display = 'none';
+                logsView.style.display = 'block';
+                statusEl.innerText = "Viewing Attendance Log Records.";
+                fetchAttendanceLogs();
             }
         }
 
@@ -240,7 +303,6 @@
                 return;
             }
 
-            // Convert Float32Array vector into normal JS array for JSON transport
             const faceDescriptor = Array.from(detection.descriptor);
 
             statusEl.innerText = "Saving employee face profile to database...";
@@ -257,7 +319,7 @@
                 if (data.status === 'success') {
                     document.getElementById('reg-user-id').value = '';
                     document.getElementById('reg-name').value = '';
-                    await syncEmployeeDescriptors(); // Re-sync new profile into memory
+                    await syncEmployeeDescriptors();
                 }
             } catch (err) {
                 console.error("Error registering employee:", err);
@@ -282,6 +344,48 @@
                 statusEl.innerText = "Network transmission error.";
                 isSending = false;
             }
+        }
+
+        async function fetchAttendanceLogs() {
+            const dateVal = document.getElementById('filter-date').value;
+            const tableBody = document.getElementById('logs-table-body');
+            tableBody.innerHTML = '<tr><td colspan="4">Loading records...</td></tr>';
+
+            let url = '/api/attendance-logs';
+            if (dateVal) {
+                url += `?date=${dateVal}`;
+            }
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    if (data.logs.length === 0) {
+                        tableBody.innerHTML = '<tr><td colspan="4">No attendance records found.</td></tr>';
+                        return;
+                    }
+
+                    tableBody.innerHTML = data.logs.map(log => `
+                        <tr>
+                            <td>${log.id}</td>
+                            <td>${log.user_id}</td>
+                            <td>${log.name}</td>
+                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tableBody.innerHTML = `<tr><td colspan="4">${data.message}</td></tr>`;
+                }
+            } catch (err) {
+                console.error("Error fetching logs:", err);
+                tableBody.innerHTML = '<tr><td colspan="4">Error retrieving logs.</td></tr>';
+            }
+        }
+
+        function clearDateFilter() {
+            document.getElementById('filter-date').value = '';
+            fetchAttendanceLogs();
         }
 
         startCamera().then(() => {
